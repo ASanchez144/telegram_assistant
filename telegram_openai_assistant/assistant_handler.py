@@ -1,30 +1,83 @@
 import time
 import asyncio
+import re
+
+
+def clean_text_and_split(text):
+    """
+    Divide el texto en párrafos formateados preservando los espacios originales.
+    Detecta listas numeradas y separa cada elemento adecuadamente.
+    """
+    # Asegurar espacio después del número solo si no está seguido por '*' para no romper **bold**
+    text = re.sub(r'(\d+)\.([^\s*])', r'\1. \2', text)  # Modificado para números múltiples y evitar *
+
+    # Dividir usando números de lista con espacio opcional después del punto
+    paragraphs = re.split(r'(\d+\.\s*\*\*[^:]+\*\*:)', text)  # \s* permite 0 o más espacios
+
+    # Combinar encabezados de lista con su contenido
+    combined_paragraphs = []
+    buffer = ""
+    for i, segment in enumerate(paragraphs):
+        if re.match(r'\d+\.\s*\*\*[^:]+\*\*:', segment):
+            if buffer:
+                combined_paragraphs.append(buffer.strip())
+            buffer = segment
+        else:
+            buffer += segment
+    if buffer.strip():
+        combined_paragraphs.append(buffer.strip())
+
+    return [p for p in combined_paragraphs if p.strip()]
+
+
+def add_spaces_to_fragment(chunk):
+    """
+    Añade espacios correctamente entre palabras y puntuación.
+    Maneja fragmentos de texto sin dividir palabras incompletas.
+    """
+    # Si el chunk comienza con espacio, preservarlo (puede indicar nueva oración)
+    if not chunk:
+        return ""
+    
+    # Manejar espacios al inicio
+    leading_space = ' ' if chunk[0].isspace() else ''
+    chunk = chunk.strip()
+    
+    # Dividir en palabras/puntuación y unir con espacios adecuados
+    parts = re.findall(r'(\w+|[.,!?;:]+)', chunk)
+    if not parts:
+        return leading_space + chunk  # Caso raro
+    
+    result = parts[0]
+    for part in parts[1:]:
+        if re.match(r'^[.,!?;:]$', part):
+            result += part
+        else:
+            result += f' {part}'
+    
+    return leading_space + result
+
 
 class AssistantHandler:
     def __init__(self, client, assistant_id):
-        self.client = client  # Cliente ya inicializado y configurado fuera de esta clase
+        self.client = client
         self.assistant_id = assistant_id
         self.thread_id = None
         self.message_history = []
 
     async def stream_response(self, message_str, send_to_telegram):
         """
-        Envía un mensaje al asistente y transmite la respuesta en tiempo real,
-        adaptado al flujo síncrono de AssistantStreamManager.
+        Envía un mensaje al asistente y transmite la respuesta acumulando fragmentos hasta detectar un párrafo completo.
         """
         print(f"[DEBUG] Enviando mensaje al asistente (stream): {message_str}")
         start_time = time.time()
 
-        # 1. Crear el hilo si no existe
         if not self.thread_id:
             thread = self.client.beta.threads.create()
             self.thread_id = thread.id
 
-        # 2. Añadir el mensaje del usuario al historial
         self.message_history.append({"role": "user", "content": message_str})
 
-        # 3. Enviar el mensaje al hilo
         self.client.beta.threads.messages.create(
             thread_id=self.thread_id,
             role="user",
@@ -32,32 +85,42 @@ class AssistantHandler:
         )
 
         try:
-            # 4. Usar `create_and_stream` como context manager SÍNCRONO
             with self.client.beta.threads.runs.create_and_stream(
                 thread_id=self.thread_id,
                 assistant_id=self.assistant_id,
             ) as event_handler:
-                # 5. Iterar sobre los fragmentos de texto usando `for`
+                buffer = ""
+
                 for partial_text in event_handler.text_deltas:
-                    chunk = partial_text.strip()
-                    if chunk:
-                        print(f"[DEBUG] Streaming chunk: {chunk}")
-                        # Usar asyncio para llamar a funciones asíncronas dentro del flujo síncrono
-                        await send_to_telegram(chunk)
-                        self.message_history.append({"role": "assistant", "content": chunk})
+                    chunk = add_spaces_to_fragment(partial_text)
+                    buffer += chunk
+
+                    # Procesar buffer para detectar párrafos completos
+                    paragraphs = clean_text_and_split(buffer)
+                    
+                    # Enviar todos los párrafos completos excepto el último (incompleto)
+                    for para in paragraphs[:-1]:
+                        await send_to_telegram(para)
+                        self.message_history.append({"role": "assistant", "content": para})
+                    
+                    # Actualizar buffer con el último fragmento (posiblemente incompleto)
+                    buffer = paragraphs[-1] if paragraphs else ""
+
+                # Enviar cualquier resto en el buffer
+                if buffer.strip():
+                    final_paras = clean_text_and_split(buffer.strip())
+                    for para in final_paras:
+                        await send_to_telegram(para)
+                        self.message_history.append({"role": "assistant", "content": para})
 
         except Exception as e:
             print(f"[ERROR] Error during streaming: {e}")
 
-        # 6. Calcular el tiempo de respuesta
         response_time = time.time() - start_time
         print(f"Respuesta completa recibida en {response_time:.2f} segundos")
-
-        # 7. Recortar el historial para evitar excesos
         self.trim_message_history()
 
     def trim_message_history(self):
-        """Recorta el historial de mensajes para mantener un tamaño razonable."""
         max_messages = 20
         if len(self.message_history) > max_messages:
             self.message_history = self.message_history[-max_messages:]
