@@ -21,7 +21,7 @@ class Bot:
         self.manager = manager
         self.assistant_handler = AssistantHandler(client, assistant_id)
         self.handlers = BotHandlers(bot_name, assistant_id, token, manager)
-        self.application = ApplicationBuilder().token(token).build()
+        self.application = ApplicationBuilder().token(token).pool_timeout(60.0).build()
         self.setup_handlers()
 
     def setup_handlers(self):

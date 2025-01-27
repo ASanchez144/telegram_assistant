@@ -25,32 +25,46 @@ class BotHandlers:
 
     async def process_message(self, update: Update, context: CallbackContext) -> None:
         """Handles incoming messages and delegates to ConversationManager."""
+        message = update.message
+        print(f"Mensaje recibido de {update.message.from_user.username}: {message}")
+        # Verificar si el mensaje proviene de un bot
+
+
+        if update.message.from_user.is_bot:
+            print("El mensaje proviene de un bot, ignorando...")
+            return  # Ignora mensajes enviados por bots
+        
+        
+        print("Estoy aquí")
         if update.message is None:
             return  # No message to process
 
         chat_type = update.effective_chat.type
         group_id = update.effective_chat.id
         message_text = update.message.text
+        print(f"Mensaje recibido de {update.message.from_user.username}: {message_text}")
 
-        # Ensure the bot is mentioned and the message is in a group
-        if chat_type == "group" and update.message.entities:
-            for entity in update.message.entities:
-                if entity.type == 'mention' and '@' + context.bot.username in message_text[entity.offset:entity.offset + entity.length]:
-                    if not self.manager.is_active(group_id):
-                        # Start a new conversation with all participating bots
-                        if self.manager.start_conversation(group_id, self.bot_name):
-                            await context.bot.send_message(
-                                chat_id=group_id,
-                                text=f"Conversation started by {self.bot_name} on group {group_id}. Use /end to terminate."
-                            )
-                            # Trigger the first turn
-                            await self.manager.handle_turn(update.message.text)
-                    else:
-                        # Ignore incoming messages while a conversation is ongoing
-                        await context.bot.send_message(
-                            chat_id=group_id,
-                            text="A conversation is already active. Please wait until it ends."
-                        )
+        if chat_type == "private":
+            # No verificar menciones en chats privados
+            if not self.manager.is_active(group_id):
+                if self.manager.start_conversation(group_id, self.bot_name):
+                    await context.bot.send_message(
+                        chat_id=group_id,
+                        text=f"Conversación iniciada por {self.bot_name}. Usa /end para terminar."
+                    )
+            await self.manager.handle_turn(update.message.text)
+        else:
+            # Solo procesar mensajes en grupos si el bot está mencionado
+            if update.message.entities:
+                for entity in update.message.entities:
+                    if entity.type == 'mention' and '@' + context.bot.username in message_text[entity.offset:entity.offset + entity.length]:
+                        if not self.manager.is_active(group_id):
+                            if self.manager.start_conversation(group_id, self.bot_name):
+                                await context.bot.send_message(
+                                    chat_id=group_id,
+                                    text=f"Conversación iniciada por {self.bot_name} en el grupo {group_id}. Usa /end para terminar."
+                                )
+                        await self.manager.handle_turn(update.message.text)
 
     async def end_conversation(self, update: Update, context: CallbackContext) -> None:
         """Ends the active conversation."""

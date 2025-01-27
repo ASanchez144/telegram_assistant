@@ -18,6 +18,7 @@ telegram_token_bots = [token.strip() for token in telegram_token_bots if token.s
 assistant_id_bots = [aid.strip() for aid in assistant_id_bots if aid.strip()]
 
 # Debugging print to verify the lists (remove in production)
-print("Telegram Tokens:", telegram_token_bots)
-print("Assistant IDs:", assistant_id_bots)
-print("Client API Key:", client_api_key)
+#print("Telegram Tokens:", telegram_token_bots)
+#print("Assistant IDs:", assistant_id_bots)
+#print("Client API Key:", client_api_key)
+print("Vamos a por ello!")
