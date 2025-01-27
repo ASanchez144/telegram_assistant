@@ -13,11 +13,11 @@ steps:
   - name: clone-repo
     run:
       command: |
-        git clone https://github.com/efelem/telegram-openai-chatbot.git
+        git clone https://github.com/ASanchez144/telegram_assistant.git
   - name: install-packages
     run:
       command: |
-        cd simple-telegram-openai-chatbot
+        cd simple-telegram-openai-assistant
         pip install -e .
 
   - name: run-deepsquare-bot
