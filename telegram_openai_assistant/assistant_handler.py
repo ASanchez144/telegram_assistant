@@ -1,6 +1,7 @@
 import time
 import asyncio
 import re
+from typing import Optional, Dict
 
 
 def clean_text_and_split(text):
@@ -64,63 +65,61 @@ class AssistantHandler:
         self.assistant_id = assistant_id
         self.thread_id = None
         self.message_history = []
+        self.threads: Dict[int, str] = {}  # Almacenar {group_id: thread_id} en memoria
 
-    async def stream_response(self, message_str, send_to_telegram):
-        """
-        Envía un mensaje al asistente y transmite la respuesta acumulando fragmentos hasta detectar un párrafo completo.
-        """
-        print(f"[DEBUG] Enviando mensaje al asistente (stream): {message_str}")
-        start_time = time.time()
+    async def stream_response(self, group_id: int, message_str: str, send_to_telegram):
+        """Envía un mensaje al asistente y transmite la respuesta al usuario."""
+        thread_id = self.threads.get(group_id)
 
-        if not self.thread_id:
+        if not thread_id:
+            print(f"[DEBUG] No se encontró un thread_id para group_id: {group_id}, creando uno nuevo.")
             thread = self.client.beta.threads.create()
-            self.thread_id = thread.id
+            if thread and hasattr(thread, 'id') and thread.id:
+                self.threads[group_id] = thread.id
+                thread_id = thread.id
+                print(f"[DEBUG] Nuevo thread_id creado: {thread_id} para group_id: {group_id}")
+            else:
+                print(f"[ERROR] No se pudo crear un thread para group_id: {group_id}")
+                return
 
-        self.message_history.append({"role": "user", "content": message_str})
+        print(f"[DEBUG] Usando thread_id: {thread_id} para group_id: {group_id}")
 
-        self.client.beta.threads.messages.create(
-            thread_id=self.thread_id,
-            role="user",
-            content=message_str
-        )
+        # Enviar el mensaje al asistente
+        try:
+            self.client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_str
+            )
+            self.message_history.append({"role": "user", "content": message_str})
+        except Exception as e:
+            print(f"[ERROR] Error enviando mensaje al asistente: {e}")
+            return
 
         try:
             with self.client.beta.threads.runs.create_and_stream(
-                thread_id=self.thread_id,
+                thread_id=thread_id,
                 assistant_id=self.assistant_id,
             ) as event_handler:
                 buffer = ""
-
                 for partial_text in event_handler.text_deltas:
                     chunk = add_spaces_to_fragment(partial_text)
                     buffer += chunk
-
-                    # Procesar buffer para detectar párrafos completos
                     paragraphs = clean_text_and_split(buffer)
-                    
-                    # Enviar todos los párrafos completos excepto el último (incompleto)
                     for para in paragraphs[:-1]:
                         await send_to_telegram(para)
                         self.message_history.append({"role": "assistant", "content": para})
-                    
-                    # Actualizar buffer con el último fragmento (posiblemente incompleto)
                     buffer = paragraphs[-1] if paragraphs else ""
-
-                # Enviar cualquier resto en el buffer
                 if buffer.strip():
                     final_paras = clean_text_and_split(buffer.strip())
                     for para in final_paras:
                         await send_to_telegram(para)
                         self.message_history.append({"role": "assistant", "content": para})
-
         except Exception as e:
-            print(f"[ERROR] Error during streaming: {e}")
-
-        response_time = time.time() - start_time
-        print(f"Respuesta completa recibida en {response_time:.2f} segundos")
-        self.trim_message_history()
+            print(f"[ERROR] Error durante el streaming: {e}")
 
     def trim_message_history(self):
+        """Mantiene el historial de mensajes limitado a los últimos 20 mensajes."""
         max_messages = 20
         if len(self.message_history) > max_messages:
             self.message_history = self.message_history[-max_messages:]
