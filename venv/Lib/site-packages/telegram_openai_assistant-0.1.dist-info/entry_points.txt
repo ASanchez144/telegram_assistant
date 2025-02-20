@@ -1,2 +1,0 @@
-[console_scripts]
-chatbot = telegram_openai_assistant.bot:main
