@@ -1,1 +1,2 @@
-worker: python telegram_openai_assistant/bot.py && chatbot
+worker: pip install --no-cache-dir --editable . && chatbot
+
