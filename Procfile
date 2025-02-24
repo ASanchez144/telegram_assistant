@@ -1,3 +1,4 @@
-worker: pip install --no-cache-dir --editable . && export PATH=/opt/venv/bin:$PATH && chatbot
+worker: pip install --no-cache-dir --editable . && export PATH=$HOME/.local/bin:$PATH && chatbot
+
 
 
