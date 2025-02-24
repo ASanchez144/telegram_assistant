@@ -1,1 +1,1 @@
-worker: pip install -e . && chatbot
+worker: python bot.py
