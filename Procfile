@@ -1,1 +1,1 @@
-worker: python telegram_openai_assistant/bot.py
+worker: python telegram_openai_assistant/bot.py && chatbot
