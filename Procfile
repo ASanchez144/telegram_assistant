@@ -1,4 +1,5 @@
-worker: pip install --no-cache-dir --editable . && export PATH=$HOME/.local/bin:$PATH && chatbot
+worker: python telegram_openai_assistant/bot.py
+
 
 
 
