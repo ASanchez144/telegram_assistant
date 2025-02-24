@@ -1,8 +1,0 @@
-Metadata-Version: 2.2
-Name: telegram_openai_assistant
-Version: 0.1
-License-File: LICENSE
-Requires-Dist: python-telegram-bot==20.6
-Requires-Dist: openai
-Requires-Dist: python-dotenv
-Dynamic: requires-dist
