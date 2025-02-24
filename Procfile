@@ -1,1 +1,1 @@
-worker: python app/bot.py
+worker: python telegram_openai_assistant/bot.py
