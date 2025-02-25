@@ -1,3 +1,6 @@
+[build]
+subdirectory = "."
+
 [run]
 runCommand = "bash -c 'source /opt/venv/bin/activate && chatbot'"
 
