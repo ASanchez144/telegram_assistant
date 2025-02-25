@@ -1,9 +1,7 @@
-[build]
-subdirectory = "."
-installCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python -m pip install -e ."
-
 [run]
-runCommand = "bash -c 'source /opt/venv/bin/activate && cp -r /app/* /app/telegram_openai_assistant/ || true && chatbot'"
+runCommand = "bash -c 'source /opt/venv/bin/activate && chatbot'"
+
+
 
 
 
