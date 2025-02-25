@@ -4,3 +4,4 @@ installCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate 
 
 [run]
 runCommand = "bash -c 'source /opt/venv/bin/activate && python -m telegram_openai_assistant.bot'"
+
