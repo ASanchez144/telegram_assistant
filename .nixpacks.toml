@@ -3,6 +3,7 @@ subdirectory = "."
 installCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python -m pip install -e ."
 
 [run]
-runCommand = "bash -c 'source /opt/venv/bin/activate && python -m telegram_openai_assistant.bot'"
+runCommand = "bash -c 'source /opt/venv/bin/activate && ln -s /app /app/telegram_openai_assistant && chatbot'"
+
 
 
