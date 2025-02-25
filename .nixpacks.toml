@@ -1,4 +1,5 @@
 [build]
+subdirectory = "."
 installCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python -m pip install -e ."
 
 [run]
