@@ -8,6 +8,7 @@ setup(
     install_requires=[
         'python-telegram-bot==20.6',  # Make sure to specify the correct versions
         'openai',
+        'Flask',
         'python-dotenv',
         # Add other dependencies here
     ],
