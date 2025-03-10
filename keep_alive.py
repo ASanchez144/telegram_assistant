@@ -1,6 +1,15 @@
+import os
+import subprocess
+
+# Verificar si Flask está instalado
+try:
+    import flask
+except ImportError:
+    print("⚠ Flask no encontrado. Instalando automáticamente...")
+    subprocess.run(["pip", "install", "Flask"])
+
 from flask import Flask
 import threading
-import os
 
 app = Flask(__name__)
 
@@ -14,4 +23,3 @@ def start_keep_alive():
 
 if __name__ == "__main__":
     start_keep_alive()
-
