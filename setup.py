@@ -13,6 +13,7 @@ setup(
     entry_points={
         'console_scripts': [
             'chatbot = telegram_openai_assistant.bot:main',
+            'keepalive=keep_alive:start_keep_alive' 
         ],
     },
 )
