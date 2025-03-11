@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-from keep_alive import start_keep_alive
 
 setup(
     name='telegram_openai_assistant',
