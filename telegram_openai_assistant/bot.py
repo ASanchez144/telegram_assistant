@@ -10,7 +10,20 @@ from .handlers import BotHandlers
 
 from .config import client_api_key
 
+import threading
+import subprocess
+
+def start_keep_alive():
+    """Ejecuta keep_alive.py en segundo plano"""
+    subprocess.Popen(["python", "keep_alive.py"])
+
+# Inicia el servidor Flask antes de lanzar el bot
+start_keep_alive()
+
+
 client = OpenAI(api_key=client_api_key)
+
+
 
 class Bot:
     def __init__(self, bot_name: str, token: str, assistant_id: str, manager: ConversationManager):
