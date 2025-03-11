@@ -9,8 +9,11 @@ def home():
     return "Bot is running!", 200
 
 def start_keep_alive():
-    port = int(os.environ.get("PORT", 5000))  # Render asigna un puerto automáticamente
-    app.run(host="0.0.0.0", port=port)
+    """Ejecuta Flask en segundo plano sin bloquear el bot"""
+    port = int(os.environ.get("PORT", 8080))
+    print(f"🚀 KeepAlive ejecutándose en el puerto {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-if __name__ == "__main__":
-    threading.Thread(target=start_keep_alive).start()  # Ejecutar el servidor en segundo plano
+# ✅ Ejecuta el servidor en un hilo separado para evitar bloqueos
+keep_alive_thread = threading.Thread(target=start_keep_alive, daemon=True)
+keep_alive_thread.start()
