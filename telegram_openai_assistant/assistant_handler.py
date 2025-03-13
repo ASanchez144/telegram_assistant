@@ -1,62 +1,29 @@
 import time
 import asyncio
 import re
-from typing import Optional, Dict
+import os
+import base64
+from typing import Optional, Dict, Callable, Any
 
 
 def clean_text_and_split(text):
     """
     Divide el texto en párrafos formateados preservando los espacios originales.
-    Detecta listas numeradas y separa cada elemento adecuadamente.
     """
-    # Asegurar espacio después del número solo si no está seguido por '*' para no romper **bold**
-    text = re.sub(r'(\d+)\.([^\s*])', r'\1. \2', text)  # Modificado para números múltiples y evitar *
-
-    # Dividir usando números de lista con espacio opcional después del punto
-    paragraphs = re.split(r'(\d+\.\s*\*\*[^:]+\*\*:)', text)  # \s* permite 0 o más espacios
-
-    # Combinar encabezados de lista con su contenido
-    combined_paragraphs = []
-    buffer = ""
-    for i, segment in enumerate(paragraphs):
-        if re.match(r'\d+\.\s*\*\*[^:]+\*\*:', segment):
-            if buffer:
-                combined_paragraphs.append(buffer.strip())
-            buffer = segment
-        else:
-            buffer += segment
-    if buffer.strip():
-        combined_paragraphs.append(buffer.strip())
-
-    return [p for p in combined_paragraphs if p.strip()]
+    paragraphs = re.split(r'\n\n+', text)
+    return [p for p in paragraphs if p.strip()]
 
 
-def add_spaces_to_fragment(chunk):
+def process_markdown(text):
     """
-    Añade espacios correctamente entre palabras y puntuación.
-    Maneja fragmentos de texto sin dividir palabras incompletas.
+    Procesa el texto para asegurar que el formato markdown de Telegram es correcto.
     """
-    # Si el chunk comienza con espacio, preservarlo (puede indicar nueva oración)
-    if not chunk:
-        return ""
-    
-    # Manejar espacios al inicio
-    leading_space = ' ' if chunk[0].isspace() else ''
-    chunk = chunk.strip()
-    
-    # Dividir en palabras/puntuación y unir con espacios adecuados
-    parts = re.findall(r'(\w+|[.,!?;:]+)', chunk)
-    if not parts:
-        return leading_space + chunk  # Caso raro
-    
-    result = parts[0]
-    for part in parts[1:]:
-        if re.match(r'^[.,!?;:]$', part):
-            result += part
-        else:
-            result += f' {part}'
-    
-    return leading_space + result
+    text = re.sub(r'\s+:', r':', text)
+    text = re.sub(r'(\d+)\.\s+([^:]+):', r'\1. *\2*:', text)
+    text = re.sub(r'([^\s])\*\*', r'\1 **', text)
+    text = re.sub(r'\*\*([^\s])', r'** \1', text)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
+    return text
 
 
 class AssistantHandler:
@@ -102,86 +69,234 @@ class AssistantHandler:
                 assistant_id=self.assistant_id,
             ) as event_handler:
                 buffer = ""
+                accumulated_text = ""
+                
                 for partial_text in event_handler.text_deltas:
-                    chunk = add_spaces_to_fragment(partial_text)
-                    buffer += chunk
-                    paragraphs = clean_text_and_split(buffer)
-                    for para in paragraphs[:-1]:
-                        await send_to_telegram(para)
-                        self.message_history.append({"role": "assistant", "content": para})
-                    buffer = paragraphs[-1] if paragraphs else ""
+                    buffer += partial_text
+                    
+                    # Cuando detectamos un doble salto de línea, enviamos el párrafo
+                    if '\n\n' in buffer:
+                        parts = buffer.split('\n\n', 1)
+                        accumulated_text += parts[0]
+                        
+                        # Procesar el texto acumulado para asegurar formato markdown correcto
+                        processed_text = process_markdown(accumulated_text.strip())
+                        
+                        if processed_text:
+                            await send_to_telegram(processed_text)
+                            self.message_history.append({"role": "assistant", "content": processed_text})
+                        
+                        buffer = parts[1]
+                        accumulated_text = ""
+                
+                # Enviar cualquier texto restante en el buffer
                 if buffer.strip():
-                    final_paras = clean_text_and_split(buffer.strip())
-                    for para in final_paras:
-                        await send_to_telegram(para)
-                        self.message_history.append({"role": "assistant", "content": para})
+                    processed_text = process_markdown(buffer.strip())
+                    await send_to_telegram(processed_text)
+                    self.message_history.append({"role": "assistant", "content": processed_text})
+                    
         except Exception as e:
             print(f"[ERROR] Error durante el streaming: {e}")
+
+    async def stream_image_response(self, group_id: int, message_str: str, image_base64: str, image_path: str, send_to_telegram):
+        """Método utilizando Files API con timeout y manejo mejorado de queued"""
+        thread_id = self.threads.get(group_id)
+
+        if not thread_id:
+            print(f"[DEBUG] No se encontró un thread_id para group_id: {group_id}, creando uno nuevo.")
+            thread = self.client.beta.threads.create()
+            if thread and hasattr(thread, 'id') and thread.id:
+                self.threads[group_id] = thread.id
+                thread_id = thread.id
+                print(f"[DEBUG] Nuevo thread_id creado: {thread_id} para group_id: {group_id}")
+            else:
+                print(f"[ERROR] No se pudo crear un thread para group_id: {group_id}")
+                return
+
+        print(f"[DEBUG] Usando thread_id: {thread_id} para group_id: {group_id} con imagen")
+
+        # Primero creamos un mensaje informativo para el usuario
+        await send_to_telegram("🔍 Estoy analizando la imagen. Esto puede tardar unos momentos...")
+
+        # Guardar información del modelo que usa el asistente para diagnóstico
+        try:
+            assistant_info = self.client.beta.assistants.retrieve(self.assistant_id)
+            model_name = getattr(assistant_info, 'model', 'desconocido')
+            print(f"[DEBUG] Modelo del asistente: {model_name}")
+        except Exception as e:
+            model_name = "desconocido"
+            print(f"[DEBUG] No se pudo obtener información del modelo: {e}")
+
+        # Intentar subir el archivo a OpenAI para obtener el file_id
+        try:
+            print(f"[DEBUG] Subiendo imagen a OpenAI Files API...")
+            
+            # Crear el mensaje del usuario con el texto
+            self.client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_str
+            )
+            print("[DEBUG] Mensaje de texto enviado correctamente")
+            
+            # Subir la imagen
+            with open(image_path, 'rb') as f:
+                file_upload = self.client.files.create(
+                    file=f,
+                    purpose="assistants"
+                )
+            
+            file_id = file_upload.id
+            print(f"[DEBUG] Archivo subido exitosamente, ID: {file_id}")
+            
+            # Intentar con el formato image_file directamente (el que funcionó antes)
+            try:
+                self.client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=[
+                        {
+                            "type": "image_file",
+                            "image_file": {
+                                "file_id": file_id
+                            }
+                        }
+                    ]
+                )
+                print("[DEBUG] Mensaje con imagen enviado correctamente")
+            except Exception as e:
+                print(f"[ERROR] Error enviando mensaje con image_file: {e}")
+                # Intentar con formato alternativo como último recurso
+                try:
+                    print("[DEBUG] Intentando formato alternativo...")
+                    with open(image_path, "rb") as img_file:
+                        b64_image = base64.b64encode(img_file.read()).decode()
+                    
+                    self.client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=[
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{b64_image}"
+                                }
+                            }
+                        ]
+                    )
+                    print("[DEBUG] Formato alternativo tuvo éxito")
+                except Exception as e2:
+                    print(f"[ERROR] Error con el formato alternativo: {e2}")
+                    await send_to_telegram("❌ No pude procesar la imagen. Por favor, intenta con otra imagen o consulta sin imagen.")
+                    return
+            
+        except Exception as e:
+            print(f"[ERROR] Error subiendo archivo a OpenAI: {e}")
+            await send_to_telegram(f"⚠️ No se pudo subir la imagen. Error: {str(e)}")
+            return
+
+        # Registramos en el historial
+        self.message_history.append({
+            "role": "user", 
+            "content": f"{message_str} [IMAGEN adjuntada como archivo: {file_id}]"
+        })
+
+        # Ejecutar el asistente para procesar el mensaje y la imagen
+        try:
+            print("[DEBUG] Iniciando análisis de la imagen...")
+            
+            # Crear un run para el thread
+            run = self.client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=self.assistant_id
+            )
+            
+            # Esperar a que termine la ejecución
+            run_status = run.status
+            run_id = run.id
+            
+            # Variables para controlar el timeout
+            max_wait_time = 120  # Segundos máximos de espera (2 minutos)
+            start_time = time.time()
+            queued_message_sent = False
+            queued_time_start = None
+            
+            while run_status not in ["completed", "failed", "cancelled", "expired"]:
+                elapsed_time = time.time() - start_time
+                print(f"[DEBUG] Estado actual del run: {run_status}, tiempo transcurrido: {elapsed_time:.1f}s")
+                
+                # Manejar el estado "queued" específicamente
+                if run_status == "queued":
+                    if not queued_message_sent:
+                        await send_to_telegram("🔄 Tu solicitud está en cola. Esto puede tardar un momento debido a alta demanda...")
+                        queued_message_sent = True
+                        queued_time_start = time.time()
+                    
+                    # Si ha estado en cola por más de 30 segundos, informar al usuario
+                    if queued_time_start and (time.time() - queued_time_start > 30):
+                        await send_to_telegram("⏳ Tu solicitud sigue en cola. A veces el procesamiento de imágenes puede tardar un poco más. Gracias por tu paciencia.")
+                        # Reset para no enviar este mensaje de nuevo
+                        queued_time_start = None
+                
+                # Verificar si excedimos el tiempo máximo de espera
+                if elapsed_time > max_wait_time:
+                    print(f"[WARN] Excedido tiempo máximo de espera ({max_wait_time}s)")
+                    await send_to_telegram("⚠️ El análisis está tomando más tiempo del esperado. Puedo continuar esperando o puedes cancelar e intentarlo nuevamente. ¿Quieres continuar esperando?")
+                    
+                    # Extender el tiempo de espera
+                    max_wait_time += 60  # Añadir un minuto más
+                
+                # Esperar un poco antes de verificar de nuevo (con backoff exponencial)
+                base_wait = min(5, 1 + (elapsed_time / 20))  # Incrementar el tiempo de espera gradualmente
+                await asyncio.sleep(base_wait)
+                
+                # Obtener estado actualizado
+                try:
+                    run = self.client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run_id
+                    )
+                    run_status = run.status
+                except Exception as e:
+                    print(f"[ERROR] Error al obtener estado del run: {e}")
+                    # Si hay error al obtener estado, incrementar el tiempo de espera
+                    await asyncio.sleep(5)
+            
+            # Informar sobre estado final
+            print(f"[DEBUG] Run completado con estado: {run_status}, tiempo total: {time.time() - start_time:.1f}s")
+            
+            if run_status == "completed":
+                # Obtener los mensajes de respuesta
+                messages = self.client.beta.threads.messages.list(
+                    thread_id=thread_id
+                )
+                
+                # Extraer el último mensaje del asistente
+                assistant_messages = []
+                for msg in messages.data:
+                    if msg.role == "assistant" and msg.run_id == run_id:
+                        # Extraer el contenido del mensaje
+                        for content_item in msg.content:
+                            if content_item.type == "text":
+                                assistant_messages.append(content_item.text.value)
+                
+                # Enviar las respuestas del asistente
+                if assistant_messages:
+                    for msg_text in assistant_messages:
+                        processed_text = process_markdown(msg_text)
+                        await send_to_telegram(processed_text)
+                        self.message_history.append({"role": "assistant", "content": processed_text})
+                else:
+                    await send_to_telegram(f"⚠️ El asistente no generó una respuesta para la imagen. Modelo usado: {model_name}")
+            else:
+                await send_to_telegram(f"❌ El análisis falló con estado: {run_status}. Modelo usado: {model_name}")
+                
+        except Exception as e:
+            print(f"[ERROR] Error durante el análisis de la imagen: {e}")
+            await send_to_telegram(f"Lo siento, ocurrió un error al analizar la imagen: {str(e)}")
 
     def trim_message_history(self):
         """Mantiene el historial de mensajes limitado a los últimos 20 mensajes."""
         max_messages = 20
         if len(self.message_history) > max_messages:
             self.message_history = self.message_history[-max_messages:]
-
-'''
-    def get_answer(self, message_str):
-        """Get answer from assistant."""
-        # Create a thread if it doesn't exist
-        print(f"Enviando mensaje al asistente: {message_str}")
-        if not self.thread_id:
-            thread = self.client.beta.threads.create()
-            self.thread_id = thread.id
-
-        # Add the user message to the history
-        self.message_history.append({"role": "user", "content": message_str})
-
-        # Send the user message to the thread
-        self.client.beta.threads.messages.create(
-            thread_id=self.thread_id, role="user", content=message_str
-        )
-
-        # Start a run for the assistant to process the thread
-        run = self.client.beta.threads.runs.create(
-            thread_id=self.thread_id,
-            assistant_id=self.assistant_id,
-        )
-
-        # Poll for the response
-        while True:
-            run = self.client.beta.threads.runs.retrieve(
-                thread_id=self.thread_id, run_id=run.id
-            )
-            if run.status == "completed":
-                break
-            time.sleep(1)
-
-        # Retrieve the latest messages from the thread
-        messages = self.client.beta.threads.messages.list(thread_id=self.thread_id)
-
-        # Find the last assistant message
-        # assistant_message = None
-        # for message in reversed(messages.dict()["data"]):
-        #     if message["role"] == "assistant":
-        #         assistant_message = message["content"][0]["text"]["value"]
-        #         break
-        # import ipdb; ipdb.set_trace();
-        assistant_message = messages.dict()['data'][0]["content"][0]["text"]["value"].strip()
-        if not assistant_message:
-            raise ValueError("No assistant response found in thread messages.")
-
-        # Add the assistant's response to the history
-        self.message_history.append({"role": "assistant", "content": assistant_message})
-
-        # Manage message history to avoid exceeding token limits
-        self.trim_message_history()
-
-        return assistant_message
-
-
-    def trim_message_history(self):
-        """Trim history to maintain token limit."""
-        max_messages = 20  # Adjust based on your token constraints
-        if len(self.message_history) > max_messages:
-            self.message_history = self.message_history[-max_messages:]
-'''
